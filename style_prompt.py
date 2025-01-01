@@ -1036,12 +1036,12 @@ class AdvPromptEnhancer:
             llm_result = ""
             self.ctx.request = rqst.oai_object_request( )
 
-            llm_result = self.ctx.execute_request(**kwargs)
+            if unload_ctx: #If uload_ctx has been instantiated, execute the user's model unload setting
+                llm_result = unload_ctx.execute_request(model=remote_model, url=LLM_URL, model_TTL=model_ttl)
+            else:
+                llm_result = self.ctx.execute_request(**kwargs)
 
             context_output += llm_result
-
-            if unload_ctx: #If uload_ctx has been instantiated, execute the user's model unload setting
-                unload_ctx.execute_request(model=remote_model, url=LLM_URL, model_TTL=model_ttl)
 
             return(llm_result, context_output, _help, self.trbl.get_troubles())
         
