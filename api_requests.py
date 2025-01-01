@@ -1030,6 +1030,14 @@ class ollama_unload_request(Request):
 
     def request_completion(self, **kwargs) -> bool:
 
+        model = kwargs.get('model')
+        url = kwargs.get('url', None)
+        tokens = kwargs.get('tokens', 500)
+        prompt = kwargs.get('prompt', None)
+        instruction = kwargs.get('instruction', "")
+        example_list = kwargs.get('example_list', [])
+        add_params = kwargs.get('add_params', None)
+
         req_mode = self.cFig.lm_request_mode
 
         keep_alive = kwargs.get('model_TTL', self.ModelTTL.NOSET)
@@ -1051,46 +1059,76 @@ class ollama_unload_request(Request):
                                    True)
             return False        
 
-        model = kwargs.get('model')
+        
 
         if not model:
             self.j_mngr.log_events("No model specified for unload", 
                                     TroubleSgltn.Severity.WARNING,
                                     True)
             return False
-        
-        llm_url = kwargs.get('url', 'http://localhost:11434')  # Get URL or use default           
+
         # replace the URL path with Ollama's native endpoint
-        base_url = self.utils.validate_and_correct_url(llm_url, '/api/generate')
+        base_url = self.utils.validate_and_correct_url(url, '/api/generate')
         headers = self.utils.build_web_header()
+
+        messages = self.utils.build_data_multi(prompt, instruction, example_list, image)
 
         params = {
             "model": model,
+            "messages": messages,
+            "temperature": creative_latitude,
+            "max_tokens": tokens,
             "keep_alive": keep_alive.value
         }
+
+        if add_params:
+            self.j_mngr.append_params(params, add_params, ['param', 'value'])
+
         try:
-            self.j_mngr.log_events(f"Attempting to set model TTL using URL: {base_url}", is_trouble=True)
-            response = requests.post(base_url, headers=headers, json=params, timeout=5)
+            response = self.retry_handler.execute_with_retry(
+                self._make_request,
+                self.RequestType.POST,
+                base_url,
+                headers,
+                params
+            )
+
+            if response.status_code in range(200, 300):
+                response_json = response.json()
+                if response_json and 'error' not in response_json:
+                    CGPT_response = self.utils.clean_response_text(
+                        response_json['choices'][0]['message']['content']
+                    )
+                    self._log_completion_metrics(response_json, "json")
+                else:
+                    error_message = response_json.get('error', 'Unknown error')
+                    self.j_mngr.log_events(
+                        f"Server error in response: {error_message}",
+                        TroubleSgltn.Severity.ERROR,
+                        True
+                    )
+                    CGPT_response = "Server was unable to process the request"
+
+            else:
+                self.j_mngr.log_events(
+                    f"Server error status: {response.status_code}: {response.text}",
+                    TroubleSgltn.Severity.ERROR,
+                    True
+                )
+                CGPT_response = "Server was unable to process the request"
 
         except requests.RequestException as e:
             self.j_mngr.log_events(f"Model unload request failed: {e.__class__.__name__}: {str(e)}", 
                                     TroubleSgltn.Severity.WARNING, 
                                     True)
             return False
-        
-        response_text = response.text if response.text else "None Provided"
 
-        if response.status_code == 200:
-            self.j_mngr.log_events(f"Model unload setting successful.  Response: {response_text}", is_trouble=True)
-            return True
-        
+
         self.j_mngr.log_events(f"Model unload failed with status: {response.status_code}, Response: {response_text}", 
                             TroubleSgltn.Severity.WARNING,
                             True)
-        return False
+        return CGPT_response
 
-
-    
 class request_context:
     def __init__(self)-> None:
         self._request = None
